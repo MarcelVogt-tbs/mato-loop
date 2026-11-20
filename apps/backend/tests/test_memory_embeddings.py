@@ -183,7 +183,7 @@ async def test_episode_reconcile_only_requeues_matching_failed_chunks() -> None:
     chunk_result = Mock()
     chunk_result.all.return_value = chunks
     db = AsyncMock(spec=AsyncSession)
-    db.execute.return_value = removed
+    db.execute.side_effect = [removed, Mock(all=lambda: [])]
     db.scalars.side_effect = [message_result, chunk_result]
 
     changed = await EpisodeIndexService.reconcile(db, retry_failed=True)

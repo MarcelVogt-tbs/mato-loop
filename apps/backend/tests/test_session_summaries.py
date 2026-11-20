@@ -1,4 +1,6 @@
 import json
+import os
+import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from mato_loop_backend.agent.memory_context import (
+    MemoryCache,
     historical_memory_contexts,
     memory_context_snapshot,
+    prepare_memory_context,
 )
 from mato_loop_backend.agent.projection import _projection_messages
 from mato_loop_backend.agent.runtime_memory import (
@@ -20,7 +24,14 @@ from mato_loop_backend.agent.runtime_memory import (
 )
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.memory.dreaming import DreamingService
+from mato_loop_backend.memory.embeddings import embedding_client
+from mato_loop_backend.memory.episode_indexing import (
+    EpisodeIndexService,
+    replace_summary_search_chunk,
+)
 from mato_loop_backend.memory.episode_retrieval import EpisodeReference, EpisodeRetrievalService
+from mato_loop_backend.memory.policy import EffectiveMemory
+from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.memory.session_summaries import (
     invalidate_summaries,
     prepare_summary,
@@ -29,19 +40,28 @@ from mato_loop_backend.memory.session_summaries import (
     validated_summary,
 )
 from mato_loop_backend.models import (
+    ApprovalRequest,
     ChatSession,
     MemoryDreamRun,
     MemoryDreamState,
     MemoryDreamTrigger,
     MemoryRecord,
+    MemorySourceMessage,
     Message,
     Project,
     UserAccount,
 )
+from mato_loop_backend.models.memory import MemoryRetirement
 from mato_loop_backend.providers import service as provider_module
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
-from mato_loop_backend.settings import AiSettings, MemorySettings, SettingsStore, TrustLevel
+from mato_loop_backend.settings import (
+    AgentRuntimeSettings,
+    AiSettings,
+    MemorySettings,
+    SettingsStore,
+    TrustLevel,
+)
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 
@@ -102,7 +122,195 @@ async def source(request):
                 yield SimpleNamespace(db=db, user=user, project=project, session=session,
                                       current=current, messages=messages, settings=settings)
     finally:
+        await embedding_client.close()
         await engine.dispose()
+
+
+async def test_session_discovery_sends_sonobin_context_without_a_memory(source):
+    p = source
+    p.session.title = "Musikwiedergabe"
+    p.messages[0].content = "Ich entwickle SonoBin. Die Wiedergabe geht auch neben der Navigation."
+    p.session.session_summary = {
+        **summary_content(p.messages[0].id, "Wiedergabe in SonoBin; geprüft mit dem Android-Auto-Client."),
+        "sourceRevision": 0, "coveredThroughMessageId": str(p.messages[-1].id),
+        "coveredThroughAt": p.messages[-1].created_at.isoformat(),
+    }
+    await p.db.flush()
+    for title, content in [
+        ("Deployment", "Docker-Image für SonoBin auf latest lassen."),
+        ("Android Auto", "Wir suchen einen Android-Auto-Emulator für die Navigation."),
+    ]:
+        distractor = ChatSession(user_id=p.user.id, project_id=p.project.id, title=title, trust_level="public")
+        p.db.add(distractor)
+        await p.db.flush()
+        p.db.add(Message(session_id=distractor.id, role="user", content=content))
+    await p.db.flush()
+    await EpisodeIndexService.reconcile(p.db)  # Also backfills already saved summaries.
+
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test")
+    earlier = Message(id=uuid4(), role="user", content="Emulator für die Navigation", attachments=[])
+    latest = Message(id=uuid4(), role="user", content="Und die Wiedergabe in sonobin?", attachments=[])
+    cache = MemoryCache()
+    args = dict(model=model, trust_level=TrustLevel.PUBLIC, memory_state=EffectiveMemory(True, True, True),
+                settings=p.settings.model_copy(update={"automatic_session_snippet_limit": 1}),
+                runtime_settings=AgentRuntimeSettings(), excluded_content_hashes=frozenset(),
+                embedding_enabled=lambda: False, cache=cache)
+    turn = await prepare_memory_context(p.db, p.current, [earlier, latest], **args)
+    text, memory_count, episode_count = turn.candidates[0]
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, tools=[], pseudonymization_enabled=False,
+        messages=_projection_messages("System", None, [latest], TrustLevel.PUBLIC, memory_context=text),
+    )
+    wire = json.dumps(provider_module._chat_body(prepared.request)["messages"], ensure_ascii=False)
+    assert (memory_count, episode_count) == (0, 1)
+    assert "Ich entwickle SonoBin" in wire
+    assert "geprüft mit dem Android-Auto-Client" in wire
+    p.session.session_summary = {**p.session.session_summary, "overview": "Regenerated summary"}
+    await p.db.flush()
+    assert (await prepare_memory_context(p.db, p.current, [earlier, latest], **args)).candidates[0] == turn.candidates[0]
+
+    # A distinct term that occurs only in the summary can find the session,
+    # but not when summaries are disabled or the source is invalidated.
+    summary_args = dict(owner_id=p.user.id, current_session_id=p.current.id, readable_by=TrustLevel.PUBLIC,
+                        query="Android-Auto-Client", anchor_only=True, semantic_enabled=False,
+                        project_id=p.project.id, full_sessions_only=True)
+    await replace_summary_search_chunk(p.db, p.session.id, summary=p.session.session_summary, anchor=p.messages[-1])
+    await p.db.flush()
+    assert (await EpisodeRetrievalService.retrieve(p.db, **summary_args, include_summaries=True)).references[0].summary_anchor
+    assert not (await EpisodeRetrievalService.retrieve(p.db, **summary_args)).references
+    await invalidate_summaries(p.db, p.session.id)
+    assert not (await EpisodeRetrievalService.retrieve(p.db, **summary_args, include_summaries=True)).references
+
+
+@pytest.mark.parametrize("live", [False, True], ids=["contract", "qwen"])
+async def test_dreaming_requires_independent_personal_evidence(source, monkeypatch, live):
+    base_url = os.getenv("MATO_LOOP_TEST_DREAMING_URL")
+    if live and not base_url:
+        pytest.skip("requires an explicit local Qwen endpoint")
+    p = source
+    provider = LlmProviderConfig(
+        name="Dreaming test", adapter_type="openai-compatible", trust_level="private",
+        config={"base_url": base_url} if live else {},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="qwen3.8-27b", supports_tools=True)
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    monkeypatch.setattr("mato_loop_backend.memory.dreaming.load_effective_ai", AsyncMock(return_value=ai))
+    await SettingsStore.save(p.db, MemorySettings(dreaming_remove_policy="auto"), user_id=p.user.id)
+
+    calls = []
+    live_outputs = []
+    real_complete = ProviderService.complete
+
+    async def complete(db, **kwargs):
+        tool = kwargs["tools"][0]["name"]
+        text = kwargs["messages"][1]["content"]
+        calls.append(tool)
+        if live:
+            result = await real_complete(db, **kwargs)
+            live_outputs.append((tool, [call.arguments for call in result.tool_calls]))
+            return result
+        if tool == "record_memory_candidates":
+            message_id, quote = re.search(r"MESSAGE ([a-f0-9-]+) \[USER\][^\n]*\n([^\n]+)", text.rsplit("NEW MESSAGES\n", 1)[-1]).groups()
+            admission, category, remove = "clear", "fact", False
+            if "Paperless" in quote:
+                subject, memory, admission = "Paperless", "Betreibt Paperless zu Hause.", "incidental"
+            elif "bootet" in quote:
+                # A quoted but ineligible result must still pass the separate relevance check.
+                subject, memory = "Xiaomi", quote
+            elif "Sohn" in quote:
+                subject, memory, category = "Sohn", "Hat einen Sohn.", "identity"
+            elif "Geburtstag" in quote:
+                subject, memory = "Frau", "Die Ehefrau hat am 12. Mai Geburtstag."
+            elif "verkauft" in quote:
+                subject, memory, admission, remove = "Acme X1", "Besitzt ein Acme X1.", "retire", True
+            elif "Acme X1" in quote or "Acme-X1" in quote:
+                subject = "Acme-X1" if "Acme-X1" in quote else "Acme X1"
+                memory = f"Besitzt ein {subject}."
+            else:
+                subject, memory = "AI-PC", "Der AI-PC hat 192 GB RAM." if "192" in quote else "Der AI-PC hat 128 GB RAM."
+            arguments = {"candidates": [{"remove": remove, "evidence": [message_id], "subject": subject,
+                                         "memory": memory, "category": category, "quote": quote, "admission": admission}]}
+        elif tool == "confirm_personal_fact":
+            statements = json.loads(text)["otherStatements"]
+            arguments = {"indices": [1, 2], "quotes": statements[:2]}
+        else:
+            decisions = []
+            for item in json.loads(text)["candidates"]:
+                action, targets = "create", []
+                if item.get("retire"):
+                    action = "retire"
+                    targets = [m["id"] for m in item["possibleMemories"] if "Acme X1" in m["content"]]
+                elif "bootet" in item["memory"]:
+                    action = "skip"
+                elif "192" in item["memory"]:
+                    action = "update"
+                    targets = [m["id"] for m in item["possibleMemories"] if "128 GB" in m["content"]]
+                decisions.append({"index": item["index"], "action": action, "memoryIds": targets,
+                                  "category": item["category"], "memory": item["memory"]})
+            arguments = {"decisions": decisions}
+        return ProviderResult(tool_calls=[ToolCall("test", tool, arguments)])
+
+    monkeypatch.setattr(ProviderService, "complete", complete)
+
+    async def turn(text, n, *, session=None, trust="public"):
+        if session is None:
+            session = ChatSession(user_id=p.user.id, trust_level=trust)
+            p.db.add(session)
+            await p.db.flush()
+        now = datetime.now(UTC) - timedelta(hours=2) + timedelta(minutes=2*n)
+        user = Message(session_id=session.id, role="user", content=text, created_at=now, trust_level=trust)
+        reply = Message(session_id=session.id, role="assistant", content="Notiert.", created_at=now + timedelta(seconds=1))
+        p.db.add_all([user, reply])
+        await p.db.flush()
+        await EpisodeIndexService.enqueue(p.db, user)
+        runs = await DreamingService.enqueue(p.db, trigger=MemoryDreamTrigger.MANUAL, session_id=session.id, user_id=p.user.id)
+        assert len(runs) == 1
+        await DreamingService.process_next(p.db)
+        assert runs[0].status == "completed", (runs[0].status, runs[0].error)
+        rows = list((await p.db.scalars(select(MemoryRecord).where(MemoryRecord.user_id == p.user.id))).all())
+        return session, rows
+
+    _, rows = await turn("Mein Xiaomi bootet ohne Akku.", 1)
+    assert not rows, live_outputs
+    _, rows = await turn("Ich habe einen Sohn.", 2)
+    assert len(rows) == 1 and "Sohn" in rows[0].content, live_outputs
+    _, rows = await turn("Meine Frau hat am 12. Mai Geburtstag.", 3)
+    assert len(rows) == 2 and any("12. Mai" in row.content for row in rows), live_outputs
+    _, rows = await turn("Mein AI-PC hat dauerhaft 128 GB RAM.", 4)
+    assert len(rows) == 3 and any("128 GB" in row.content for row in rows), live_outputs
+    _, rows = await turn("Ich habe meinen AI-PC aufgerüstet. Mein AI-PC hat jetzt 192 statt 128 GB RAM.", 5)
+    assert len(rows) == 3 and any("192 GB" in row.content for row in rows), repr(([row.content for row in rows], live_outputs[-4:]))
+    assert not any("128 GB" in row.content for row in rows), repr(([row.content for row in rows], live_outputs[-3:]))
+    _, rows = await turn("Ich besitze ein Acme X1 als mein Smartphone.", 6)
+    assert len(rows) == 4 and any("Acme X1" in row.content for row in rows), live_outputs
+    if not live:
+        await SettingsStore.save(p.db, MemorySettings(dreaming_remove_policy="ask"), user_id=p.user.id)
+    _, rows = await turn("Ich habe mein Acme X1 verkauft. Ich besitze es nicht mehr.", 8)
+    if not live:
+        assert len(rows) == 4
+        assert await p.db.scalar(select(MemoryRetirement).where(MemoryRetirement.user_id == p.user.id)) is None
+        approval = await p.db.scalar(select(ApprovalRequest).where(
+            ApprovalRequest.user_id == p.user.id, ApprovalRequest.action_kind == "memory_remove",
+        ))
+        assert approval is not None
+        assert await MemoryService.apply_approved_change(p.db, approval, owner_id=p.user.id) == "applied"
+        rows = list((await p.db.scalars(select(MemoryRecord).where(MemoryRecord.user_id == p.user.id))).all())
+    assert len(rows) == 3 and not any("Acme X1" in row.content for row in rows), live_outputs
+    older_statement = "Mein Acme X1 ist mein Smartphone." if live else "Mein Acme-X1 ist mein Smartphone."
+    _, rows = await turn(older_statement, 7)
+    assert len(rows) == 3 and not any("Acme X1" in row.content for row in rows), live_outputs
+    if not live:
+        _, rows = await turn("Wenn ich zu Hause etwas scanne, landet es bei mir in Paperless.", 9, trust="private")
+        assert len(rows) == 3
+        _, rows = await turn("Zu Hause hat Paperless meinen letzten Scan einsortiert.", 10)
+        assert len(rows) == 3
+        _, rows = await turn("Die Scans von zu Hause landen bei mir immer wieder in Paperless.", 11)
+        assert len(rows) == 3  # The private source may not confirm this public candidate.
+        _, rows = await turn("Meine Dokumente kommen daheim über den Scanner zu Paperless.", 12)
+        setup = next(row for row in rows if "Paperless" in row.content)
+        assert len(rows) == 4 and calls.count("confirm_personal_fact") == 1
+        assert len((await p.db.scalars(select(MemorySourceMessage).where(MemorySourceMessage.memory_id == setup.id))).all()) == 3
 
 
 async def test_incremental_summary_keeps_checkpoint_on_invalid_output(source, monkeypatch):

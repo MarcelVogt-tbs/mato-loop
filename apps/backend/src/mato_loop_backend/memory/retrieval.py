@@ -8,6 +8,7 @@ from functools import reduce
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,10 +45,21 @@ def exact_name_tsquery(names: tuple[str, ...]):
     )
 
 
-def lexical_overlap_tsquery(query: str):
+def lexical_overlap_tsquery(query: str, *, informative_only: bool = False):
     # Quoting the tokenized terms keeps websearch operators out of the input.
+    terms = memory_lexical_terms(query)
+    if informative_only and terms:
+        # Filter common words using PostgreSQL's dictionaries, then keep the
+        # original tokens for exact matches in the language-independent index.
+        words = func.unnest(array(terms)).table_valued("word").render_derived()
+        terms_sql = select(func.string_agg(func.concat('"', words.c.word, '"'), " OR ")).where(
+            func.length(words.c.word) >= 3,
+            func.numnode(func.plainto_tsquery("german", words.c.word)) > 0,
+            func.numnode(func.plainto_tsquery("english", words.c.word)) > 0,
+        ).scalar_subquery()
+        return func.websearch_to_tsquery("simple", func.coalesce(terms_sql, ""))
     return func.websearch_to_tsquery(
-        "simple", " OR ".join(f'"{term}"' for term in memory_lexical_terms(query)),
+        "simple", " OR ".join(f'"{term}"' for term in terms),
     )
 
 

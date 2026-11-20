@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, and_, func, or_, select
+from sqlalchemy import JSON, String, and_, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +55,7 @@ class EpisodeReference:
     excerpt: tuple[EpisodeExcerptMessage, ...]
     project_id: UUID | None = None
     content_is_untrusted: bool = True
+    summary_anchor: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +367,10 @@ class EpisodeRetrievalService:
         project_id: UUID | None = None,
         distinct_sessions: bool = True,
         exact_names: tuple[str, ...] = (),
+        current_query: str | None = None,
+        include_summaries: bool = False,
+        user_messages_only: bool = False,
+        before: datetime | None = None,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -387,12 +392,34 @@ class EpisodeRetrievalService:
         )
         if session_id is not None:
             filters.append(ChatSession.id == session_id)
-        tsquery = (
+        if user_messages_only:
+            filters.append(Message.role == "user")
+        if before is not None:
+            filters.append(Message.created_at < before)
+        if include_summaries and anchor_only:
+            filters.append(or_(
+                ~MessageSearchChunk.is_summary,
+                and_(
+                    ChatSession.session_summary["coveredThroughMessageId"].as_string() == func.cast(Message.id, String),
+                    ChatSession.session_summary["sourceRevision"].as_integer() == ChatSession.summary_source_revision,
+                ),
+            ))
+        else:
+            filters.append(~MessageSearchChunk.is_summary)
+        strict_query = (
             func.plainto_tsquery("simple", " ".join(memory_lexical_terms(cleaned_query)))
             if distinct_sessions else func.websearch_to_tsquery("simple", cleaned_query)
         )
+        if distinct_sessions and "-" in cleaned_query:
+            # Splitting a hyphenated identifier can make the PostgreSQL parser
+            # reinterpret one component as a number, unlike the indexed text.
+            strict_query = strict_query.op("||")(func.plainto_tsquery("simple", cleaned_query[:2_000]))
+        overlap = lexical_overlap_tsquery(current_query, informative_only=True) if current_query else None
+        tsquery = strict_query if overlap is None else strict_query.op("||")(overlap)
         per_session_limit = 2 if distinct_sessions else limit
-        lexical_rank = func.ts_rank_cd(MessageSearchChunk.search_vector, tsquery)
+        lexical_rank = func.ts_rank_cd(MessageSearchChunk.search_vector, strict_query)
+        if overlap is not None:
+            lexical_rank = lexical_rank + func.ts_rank_cd(MessageSearchChunk.search_vector, overlap, 32)
         lexical_candidates = (
             select(
                 MessageSearchChunk.id.label("chunk_id"),
@@ -518,6 +545,17 @@ class EpisodeRetrievalService:
             if row is not None:
                 named = _Candidate(*row)
         anchors = _rank_candidates(lexical, semantic, limit, distinct_sessions=distinct_sessions, named=named)
+        if include_summaries and anchor_only and any(candidate.chunk.is_summary for candidate in anchors):
+            passages: dict[UUID, _Candidate] = {}
+            for candidate in _ranked_candidates(lexical, semantic):
+                if not candidate.chunk.is_summary:
+                    passages.setdefault(candidate.session.id, candidate)
+            # Keep the session's rank, but use its matching original passage as
+            # evidence when one was also found by the same search.
+            anchors = [
+                passages.get(candidate.session.id, candidate) if candidate.chunk.is_summary else candidate
+                for candidate in anchors
+            ]
         references = (
             [
                 EpisodeReference(
@@ -526,9 +564,10 @@ class EpisodeRetrievalService:
                     anchor_message_id=candidate.message.id,
                     anchor_created_at=candidate.message.created_at,
                     anchor_role=candidate.message.role,
-                    anchor_content=candidate.chunk.content,
+                    anchor_content="" if candidate.chunk.is_summary else candidate.chunk.content,
                     excerpt=(),
                     project_id=candidate.session.project_id,
+                    summary_anchor=candidate.chunk.is_summary,
                 )
                 for candidate in anchors
             ]

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.memory.episode_indexing import replace_summary_search_chunk
 from mato_loop_backend.models import AgentRun, ChatSession, MemoryDreamRun, Message
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.service import ProviderService
@@ -177,6 +178,7 @@ async def process_summary(db: AsyncSession, run, session, model, provider, *, re
     await db.execute(update(ChatSession).where(ChatSession.id == locked.id).values(
         session_summary=summary, updated_at=ChatSession.updated_at,
     ))
+    await replace_summary_search_chunk(db, locked.id, summary=summary, anchor=messages[-1])
     run.summary = summary
     run.summary_status = "completed"
     run.summary_error = None
@@ -215,6 +217,7 @@ async def invalidate_summaries(db: AsyncSession, session_id: UUID) -> None:
         session_summary=None, summary_source_revision=ChatSession.summary_source_revision + 1,
         updated_at=ChatSession.updated_at,
     ))
+    await replace_summary_search_chunk(db, session_id)
     await db.execute(update(MemoryDreamRun).where(MemoryDreamRun.session_id == session_id).values(
         summary=None,
     ))

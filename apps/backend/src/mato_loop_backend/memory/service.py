@@ -36,7 +36,9 @@ from mato_loop_backend.models import (
     Message,
     Notification,
 )
+from mato_loop_backend.models.memory import MemoryRetirement
 from mato_loop_backend.notifications import NotificationService
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
@@ -48,6 +50,12 @@ _MAX_LEXICAL_TERMS = 20
 _MAX_LEXICAL_TERM_CHARACTERS = 256
 _MAX_SOURCE_EVIDENCE = 10
 _MEMORY_APPROVAL_SCHEMA_VERSION = 3
+
+
+def corroborated_evidence_hash(current: str, *older: str) -> str:
+    if len(older) == 1:  # Existing proposals used this digest format.
+        return hashlib.sha256(hashlib.sha256(current.encode()).digest() + older[0].encode()).hexdigest()
+    return hashlib.sha256(b"".join(hashlib.sha256(item.encode()).digest() for item in (current, *older))).hexdigest()
 
 
 def _user_managed(item: MemoryRecord) -> bool:
@@ -152,6 +160,8 @@ class MemoryApprovalPayload(BaseModel):
         validation_alias=AliasChoices("removePolicy", "remove_policy"),
         serialization_alias="removePolicy",
     )
+    corroboration_hash: str | None = Field(default=None, serialization_alias="corroborationHash", validation_alias="corroborationHash")
+    subject_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", alias="subjectKey")
 
     @model_validator(mode="after")
     def validate_targets(self) -> MemoryApprovalPayload:
@@ -999,6 +1009,8 @@ class MemoryService:
         update_policy: ToolExecutionPolicy,
         remove_policy: ToolExecutionPolicy,
         created: list[ApprovalRequest] | None = None,
+        corroboration_hash: str | None = None,
+        subject_key: str | None = None,
     ) -> ApprovalRequest:
         ordered_targets = sorted(targets, key=lambda item: str(item.id))
         if not ordered_targets or any(item.user_id != owner_id for item in ordered_targets):
@@ -1049,6 +1061,8 @@ class MemoryService:
             readableBy=readable_by,
             updatePolicy=update_policy,
             removePolicy=remove_policy,
+            corroborationHash=corroboration_hash,
+            subjectKey=subject_key,
         )
         action_kind = f"memory_{action}"
         target_key = [(str(item.id), item.revision) for item in snapshots]
@@ -1153,8 +1167,35 @@ class MemoryService:
 
     @staticmethod
     async def _valid_source_evidence(
-        db: AsyncSession, payload: MemoryApprovalPayload, *, owner_id: UUID
+        db: AsyncSession, payload: MemoryApprovalPayload, *, owner_id: UUID, lock: bool = False,
     ) -> bool:
+        if payload.corroboration_hash is not None:
+            from mato_loop_backend.memory.dreaming import _personal_evidence
+            from mato_loop_backend.sessions.trust import session_visibility_filters
+
+            if len(payload.evidence_message_ids) not in {1, 2, 3}:
+                return False
+            statement = select(Message).join(ChatSession).where(
+                    Message.id.in_(payload.evidence_message_ids), ChatSession.user_id == owner_id,
+                    ChatSession.memory_mode == "full", ChatSession.session_type == "chat",
+                    ChatSession.parent_session_id.is_(None), ~deleted_session_clause(),
+                    *session_visibility_filters(payload.readable_by), Message.role == "user",
+                    Message.generation_status == "completed", Message.error_code.is_(None),
+            ).execution_options(populate_existing=True)
+            if lock:
+                statement = statement.with_for_update(read=True, of=(Message, ChatSession), skip_locked=True)
+            rows = {item.id: item for item in (await db.scalars(statement)).all()}
+            ordered = [rows[key] for key in payload.evidence_message_ids if key in rows]
+            if len(ordered) != len(payload.evidence_message_ids):
+                return False
+            current, *older = ordered
+            return bool(
+                current.session_id == payload.source_session_id
+                and len({item.session_id for item in ordered}) == len(ordered)
+                and all(item.created_at < current.created_at for item in older)
+                and all(_personal_evidence(item) for item in ordered)
+                and corroborated_evidence_hash(current.content, *(item.content for item in older)) == payload.corroboration_hash
+            )
         messages = list(
             (
                 await db.scalars(
@@ -1227,9 +1268,9 @@ class MemoryService:
                 source_session_id=payload.source_session_id,
                 evidence_message_ids=payload.evidence_message_ids,
             )
-            if action == "remove"
+            if action == "remove" and payload.corroboration_hash is None
             else await MemoryService._valid_source_evidence(
-                db, payload, owner_id=owner_id
+                db, payload, owner_id=owner_id, lock=for_update,
             )
         )
         if not evidence_valid:
@@ -1327,6 +1368,14 @@ class MemoryService:
         payload, action, session, dream_run, targets = context
         target_ids = [item.id for item in targets]
         if action == "remove":
+            if payload.subject_key is not None:
+                source = await db.get(Message, payload.evidence_message_ids[0])
+                if source is None:
+                    return "target_changed"
+                await MemoryService.record_retirement(
+                    db, owner_id=owner_id, subject_key=payload.subject_key,
+                    trust_level=payload.trust_level, observed_at=source.created_at,
+                )
             removed = {"id": str(targets[0].id), "category": targets[0].category, "revision": targets[0].revision}
             await MemoryService.delete(db, targets[0], owner_id=owner_id)
             record_change(db, dream_run.id, "remove", before=[removed])
@@ -1371,6 +1420,8 @@ class MemoryService:
                     )
                 if mutation.item is None or mutation.conflict:
                     return "target_changed"
+                if payload.subject_key is not None:
+                    mutation.item.dream_subject_key = payload.subject_key if memory_edit is None else None
                 if memory_edit is not None:
                     # Owner-only overrides; model mutations keep their audience and pin rules.
                     # Duplicate protection is owner-wide, independent of the final audience.
@@ -1392,6 +1443,19 @@ class MemoryService:
                 dream_run.removed_memory_count or 0
             ) + len(targets) - 1
         return "applied"
+
+    @staticmethod
+    async def record_retirement(
+        db: AsyncSession, *, owner_id: UUID, subject_key: str, trust_level: TrustLevel, observed_at: datetime,
+    ) -> None:
+        marker = postgresql_insert(MemoryRetirement).values(
+            user_id=owner_id, subject_key=subject_key, trust_level=trust_level.value, observed_at=observed_at,
+        )
+        await db.execute(marker.on_conflict_do_update(
+            index_elements=["user_id", "subject_key", "trust_level"],
+            set_={"observed_at": marker.excluded.observed_at},
+            where=MemoryRetirement.observed_at < marker.excluded.observed_at,
+        ))
 
     @staticmethod
     async def _create(
@@ -1694,6 +1758,8 @@ class MemoryService:
                 item.audience = audience.value
                 if source_type != MemorySourceType.DREAMING:
                     item.user_managed = True
+                    if content_changed:
+                        item.dream_subject_key = None
                 if pinned is not None:
                     item.pinned = pinned
                 item.normalized_content_hash = content_hash

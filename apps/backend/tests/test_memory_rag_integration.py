@@ -18,7 +18,10 @@ from mato_loop_backend.memory.embeddings import (
     EmbeddingError,
     embedding_client,
 )
-from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
+from mato_loop_backend.memory.episode_indexing import (
+    EpisodeIndexService,
+    replace_summary_search_chunk,
+)
 from mato_loop_backend.memory.episode_retrieval import EpisodeRetrievalService
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrievalService,
@@ -186,6 +189,44 @@ async def test_public_model_episode_rag_excludes_private_sessions() -> None:
         assert result.references
         assert {reference.session_id for reference in result.references} == {public_session.id}
         await db.rollback()
+
+
+async def test_session_summary_finds_an_unnamed_project_by_meaning(monkeypatch) -> None:
+    async with AsyncSessionFactory() as db:
+        user = UserAccount(username=f"summary-search-{uuid4().hex}", password_hash="!disabled-test-account")
+        db.add(user)
+        await db.flush()
+        session = ChatSession(user_id=user.id, title="SonoBin", trust_level="public")
+        db.add(session)
+        await db.flush()
+        anchor = Message(session_id=session.id, role="assistant", content="Ja, das klappt.")
+        db.add(anchor)
+        await db.flush()
+        summary = {
+            "overview": "SonoBin verwaltet meine persönliche Musikbibliothek und spielt Wiedergabelisten ab.",
+            "items": [], "sourceRevision": 0, "coveredThroughMessageId": str(anchor.id),
+        }
+        session.session_summary = summary
+        await replace_summary_search_chunk(db, session.id, summary=summary, anchor=anchor)
+        await db.commit()
+        try:
+            # Exercise the real indexing worker, not a mocked or preloaded vector.
+            await EpisodeIndexService.process_next(db)
+            query = "Which app organizes my song collection and plays playlists?"
+            embedding = await embedding_client.embed_query(query)
+            no_extra_embedding = AsyncMock(side_effect=AssertionError("Already embedded the query"))
+            monkeypatch.setattr(embedding_client, "embed_query", no_extra_embedding)
+            options = dict(owner_id=user.id, current_session_id=None, readable_by=TrustLevel.PUBLIC,
+                           query=query, current_query=query, anchor_only=True, full_sessions_only=True,
+                           include_summaries=True, max_semantic_distance=0.35)
+            assert not (await EpisodeRetrievalService.retrieve(db, **options, semantic_enabled=False)).references
+            result = await EpisodeRetrievalService.retrieve(db, **options, query_embedding=embedding)
+            assert [ref.session_id for ref in result.references] == [session.id]
+            no_extra_embedding.assert_not_called()
+        finally:
+            await db.rollback()
+            await db.delete(user)
+            await db.commit()
 
 
 async def test_episode_rag_is_immediate_without_embedding_or_dreaming() -> None:

@@ -6,9 +6,10 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from time import monotonic
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, delete, func, or_, select, update
+from sqlalchemy import JSON, String, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.config import get_runtime_config
@@ -119,12 +120,32 @@ def message_search_chunks(message: Message) -> list[MessageSearchChunk]:
     ]
 
 
+def summary_search_text(summary: dict[str, Any]) -> str:
+    return "\n".join([summary["overview"], *(item["text"] for item in summary["items"])])
+
+
+async def replace_summary_search_chunk(
+    db: AsyncSession, session_id: UUID, *, summary: dict[str, Any] | None = None, anchor: Message | None = None,
+) -> None:
+    await db.execute(delete(MessageSearchChunk).where(
+        MessageSearchChunk.is_summary,
+        MessageSearchChunk.message_id.in_(select(Message.id).where(Message.session_id == session_id)),
+    ))
+    if summary is not None and anchor is not None and _eligible(anchor):
+        content = summary_search_text(summary)
+        db.add(MessageSearchChunk(
+            message_id=anchor.id, chunk_index=0, is_summary=True, content=content,
+            content_hash=_content_hash(content), profile_fingerprint=ACTIVE_EMBEDDING_PROFILE.fingerprint,
+            status=MemoryEmbeddingStatus.QUEUED.value,
+        ))
+
+
 class EpisodeIndexService:
     @staticmethod
     async def enqueue(db: AsyncSession, message: Message) -> int:
         await db.execute(
             delete(MessageSearchChunk).where(
-                MessageSearchChunk.message_id == message.id
+                MessageSearchChunk.message_id == message.id, ~MessageSearchChunk.is_summary,
             )
         )
         if not _eligible(message):
@@ -153,7 +174,7 @@ class EpisodeIndexService:
         existing_by_message: dict[UUID, list[MessageSearchChunk]] = {}
         for chunk in (
             await db.scalars(
-                select(MessageSearchChunk).order_by(
+                select(MessageSearchChunk).where(~MessageSearchChunk.is_summary).order_by(
                     MessageSearchChunk.message_id,
                     MessageSearchChunk.chunk_index,
                 )
@@ -185,6 +206,25 @@ class EpisodeIndexService:
                 continue
             await EpisodeIndexService.enqueue(db, message)
             changed += max(len(existing), len(expected))
+        # Rebuild derived rows for existing summaries or after an embedding profile change.
+        summary_rows = (await db.execute(
+            select(ChatSession.id, ChatSession.session_summary, Message, MessageSearchChunk)
+            .join(Message, Message.session_id == ChatSession.id)
+            .outerjoin(MessageSearchChunk, (MessageSearchChunk.message_id == Message.id) & MessageSearchChunk.is_summary)
+            .where(
+                ChatSession.session_summary["coveredThroughMessageId"].as_string() == func.cast(Message.id, String),
+                ChatSession.session_summary["sourceRevision"].as_integer() == ChatSession.summary_source_revision,
+                *_eligible_filters(),
+            ).with_for_update(of=ChatSession)
+        )).all()
+        for session_id, summary, anchor, row in summary_rows:
+            if (
+                row is None or row.content_hash != _content_hash(summary_search_text(summary))
+                or row.profile_fingerprint != ACTIVE_EMBEDDING_PROFILE.fingerprint
+                or (retry_failed and row.status == MemoryEmbeddingStatus.FAILED.value)
+            ):
+                await replace_summary_search_chunk(db, session_id, summary=summary, anchor=anchor)
+                changed += 1
         await db.commit()
         return changed
 
@@ -235,7 +275,7 @@ class EpisodeIndexService:
                         MessageSearchChunk.next_attempt_at,
                         MessageSearchChunk.updated_at,
                     )
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(of=MessageSearchChunk, skip_locked=True)
                     .limit(config.embedding_batch_size)
                 )
             ).all()
@@ -270,7 +310,13 @@ class EpisodeIndexService:
             message = await db.scalar(select(Message).where(
                 Message.id == message_id, *_eligible_filters(),
             ))
-            expected = chunk_message_content(message.content) if message and _eligible(message) else []
+            expected = []
+            if message and _eligible(message):
+                if row is not None and row.is_summary:
+                    # Updates and invalidations replace/delete the row in the same transaction.
+                    expected = [row.content]
+                else:
+                    expected = chunk_message_content(message.content)
             if (
                 row is None
                 or message is None

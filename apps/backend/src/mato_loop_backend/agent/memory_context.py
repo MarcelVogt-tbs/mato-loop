@@ -23,6 +23,7 @@ from mato_loop_backend.agent.runtime_memory import (
     _bounded_automatic_payload,
     _bounded_memory_overview,
     _cross_session_context_text,
+    _current_memory_query,
     _durable_memory_payload,
     _memory_overview_continuation,
     _memory_overview_requested,
@@ -87,6 +88,7 @@ def memory_context_snapshot(
         snapshot.messages.update((UUID(message_id), session_id) for message_id in message_ids)
         if "summarySourceRevision" in item:
             snapshot.summaries[session_id] = item["summarySourceRevision"]
+            snapshot.messages[UUID(item["summaryCoveredThroughMessageId"])] = session_id
     for item in payload.get("projectSessionIndex", {}).get("sessions", []):
         arguments = item["sessionReadArguments"]
         session_id = UUID(arguments["session_id"])
@@ -330,6 +332,8 @@ async def prepare_memory_context(
                             anchor_only=True, full_sessions_only=True,
                             project_id=session.project_id,
                             exact_names=names,
+                            current_query=_current_memory_query(records),
+                            include_summaries=settings.session_summaries_enabled,
                         )
                     ).references
                 if episode_query_enabled and settings.recent_session_snippet_limit > 0 and (

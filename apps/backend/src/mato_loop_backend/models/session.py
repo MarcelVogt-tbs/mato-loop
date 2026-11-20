@@ -386,7 +386,7 @@ class MessageSearchChunk(Base):
             "(status <> 'ready' AND embedding IS NULL)",
             name="ready_vector_valid",
         ),
-        UniqueConstraint("message_id", "chunk_index"),
+        UniqueConstraint("message_id", "chunk_index", "is_summary", name="uq_message_search_chunks_source"),
         Index("ix_message_search_chunks_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_message_search_chunks_queue", "status", "next_attempt_at"),
     )
@@ -396,6 +396,7 @@ class MessageSearchChunk(Base):
         ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     search_vector: Mapped[Any] = mapped_column(

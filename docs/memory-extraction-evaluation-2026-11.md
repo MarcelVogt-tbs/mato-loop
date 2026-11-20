@@ -80,28 +80,20 @@ The current prompt lost the volunteer-project fact in one follow-up response; th
 
 For the refined main stage, mean provider-request duration was 5.36 seconds for current and 3.29 seconds for candidate. Reported input tokens increased from 111,162 to 134,430; output tokens fell from 47,342 to 28,791. This is an observation, **not a latency, cost, or cache-hit guarantee**; server load and sampling were uncontrolled.
 
-## Reproduce or continue
+## Run a current evaluation
 
-Check scoring and paired inputs without model requests:
+The results above used an older extraction contract. To reproduce them, use the source revision recorded with the original artifacts. In a current checkout, check the production contract and scoring without model requests:
 
 ```bash
 ./scripts/eval.sh memory-extraction --check
 ```
 
-Run the comparisons against an available endpoint, using unused output paths:
+Run the current prompt against an available endpoint, using an unused output path:
 
 ```bash
 ./scripts/eval.sh memory-extraction --runs 3 \
   --base-url http://192.168.1.102:13306/v1 --model qwen3.8-27b \
-  --output /workspace/data/memory-extraction-new-initial.json
-
-./scripts/eval.sh memory-extraction --runs 3 --refined \
-  --base-url http://192.168.1.102:13306/v1 --model qwen3.8-27b \
-  --output /workspace/data/memory-extraction-new-refined.json
-
-./scripts/eval.sh memory-extraction --runs 3 --refined --holdout \
-  --base-url http://192.168.1.102:13306/v1 --model qwen3.8-27b \
-  --output /workspace/data/memory-extraction-new-holdout.json
+  --output /workspace/data/memory-extraction-current.json
 ```
 
 Local raw artifacts, intentionally ignored by Git:

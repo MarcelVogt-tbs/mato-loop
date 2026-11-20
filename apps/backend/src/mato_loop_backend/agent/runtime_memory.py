@@ -41,8 +41,12 @@ def _memory_rag_query(records: list[Message]) -> str | None:
     )
 
 
+def _current_memory_query(records: list[Message]) -> str:
+    return next((item.content.strip()[:2_000] for item in reversed(records) if item.role == "user"), "")
+
+
 def _mentioned_memory_names(records: list[Message], known_names: tuple[str, ...]) -> tuple[str, ...]:
-    current = next((item.content.strip()[:2_000].casefold() for item in reversed(records) if item.role == "user"), "")
+    current = _current_memory_query(records).casefold()
     matches = []
     for name in {name.strip().casefold() for name in known_names}:
         if not 3 <= len(name) <= 100 or not any(char.isalnum() for char in name):
@@ -343,25 +347,28 @@ def _recent_episode_item(
     return payload, [(message, "content") for message in messages]
 
 
-def _summary_episode_item(reference, summary, recent_reference=None):
-    payload, _ = _relevant_episode_item(reference)
+def _summary_episode_item(reference, summary, recent_reference=None, *, keep_anchor=False):
+    payload, anchor_fields = _relevant_episode_item(reference)
     payload["source"] = "summary"
-    payload["anchorMessage"].pop("preview")
+    if not keep_anchor or not reference.anchor_content:
+        payload["anchorMessage"].pop("preview")
+        anchor_fields = []
     payload["summary"] = summary["overview"] + "\n" + "\n".join(
         f"[{item['status']}] {item['text']}" for item in summary["items"]
     )
     payload["summarySourceRevision"] = summary["sourceRevision"]
     payload["summaryCoveredThroughMessageId"] = summary["coveredThroughMessageId"]
     payload["summaryCoveredThroughAt"] = summary["coveredThroughAt"]
-    payload["sessionReadArguments"]["around_message_id"] = summary["coveredThroughMessageId"]
+    if not anchor_fields:
+        payload["sessionReadArguments"]["around_message_id"] = summary["coveredThroughMessageId"]
     covered_at = datetime.fromisoformat(summary["coveredThroughAt"])
     tail, _ = _recent_episode_item(recent_reference or reference)
     payload["messages"] = [message for message in tail["messages"]
                            if (datetime.fromisoformat(message["createdAt"]), message["id"])
                            > (covered_at, summary["coveredThroughMessageId"])]
-    payload["truncated"] = False
+    payload["truncated"] = bool(anchor_fields and payload["truncated"])
     # Preserve newer messages before older summarized content when fitting the shared budget.
-    return payload, [*((message, "content") for message in payload["messages"]), (payload, "summary")]
+    return payload, [*((message, "content") for message in payload["messages"]), *anchor_fields, (payload, "summary")]
 
 
 def _summary_covers_anchor(reference, summary):
@@ -448,8 +455,13 @@ def _bounded_automatic_payload(
         if isinstance(source, EpisodeReference) and source.session_id in summaries and (
             build is _recent_episode_item or _summary_covers_anchor(source, summaries[source.session_id])
         ):
-            item, text_fields = _summary_episode_item(source, summaries[source.session_id], recent_by_session.get(source.session_id))
+            item, text_fields = _summary_episode_item(
+                source, summaries[source.session_id], recent_by_session.get(source.session_id),
+                keep_anchor=build is _relevant_episode_item,
+            )
         else:
+            if isinstance(source, EpisodeReference) and source.summary_anchor:
+                return
             item, text_fields = build(source)
         _append_bounded(payload, key, item, text_fields, max_characters=max_characters)
 

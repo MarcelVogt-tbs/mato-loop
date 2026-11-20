@@ -1970,9 +1970,13 @@ def test_evaluate_checks_dreaming_candidate_count_and_evidence() -> None:
                 {
                     "candidates": [
                         {
-                            "memory": "Lara heißt Lara.",
-                            "category": "identity",
+                            "memory": "Die Nutzerin ist ausgebildete Architektin.",
+                            "category": "fact",
                             "evidence": ["30000000-0000-4000-8000-000000000001"],
+                            "subject": "Architektin",
+                            "quote": "Ich bin ausgebildete Architektin",
+                            "admission": "clear",
+                            "remove": False,
                         }
                     ]
                 },
@@ -1990,7 +1994,7 @@ def test_dreaming_and_reconciliation_repairs_use_runtime_helpers() -> None:
     )
 
     assert dreaming_messages[-1]["role"] == "tool"
-    assert "only supplied message UUIDs" in dreaming_messages[-1]["content"]
+    assert dreaming.DREAMING_EVIDENCE_INSTRUCTION in dreaming_messages[-1]["content"]
     assert [message["role"] for message in dreaming_messages] == [
         "system",
         "user",
@@ -2016,7 +2020,7 @@ def test_memory_plan_dreaming_cases_use_production_contracts() -> None:
     )
 
     assert dreaming_messages[0]["content"] == dreaming.DREAMING_SYSTEM_PROMPT
-    assert dreaming_tools == [dreaming._record_candidates_tool()]
+    assert dreaming_tools == [dreaming._record_candidates_tool(prompt_eval.MemorySettings().dreaming_max_candidates)]
     assert reconciliation_messages[0]["content"] == dreaming.RECONCILIATION_SYSTEM_PROMPT
     assert reconciliation_tools == [dreaming._reconciliation_tool(1)]
     invalid = ProviderResult(
@@ -2152,15 +2156,16 @@ def test_life_event_evaluations_check_semantics_and_evidence_dates() -> None:
     visit = {
         "memory": "Am 14. November 2026 besuchte ich Salzburg mit meiner Familie.",
         "category": "fact", "evidence": [str(prompt_eval.DREAM_USER_MESSAGE_ID)],
-        "remove": False,
+        "remove": False, "subject": "Salzburg", "admission": "clear",
+        "quote": "Gestern habe ich mit meiner Familie Salzburg besucht.",
     }
     result = ProviderResult(tool_calls=[ToolCall("date", "record_memory_candidates", {
         "candidates": [visit],
     })])
-    dated_case = _case("dreaming_remembers_dated_family_visit")
+    dated_case = _case("dreaming_leaves_dated_family_visit_in_history")
+    assert evaluate(dated_case, result) == ["expected 0 candidates, got 1"]
+    result.tool_calls[0].arguments["candidates"] = []
     assert not evaluate(dated_case, result)
-    visit["memory"] = "Am 15. November 2026 besuchte ich Salzburg mit meiner Familie."
-    assert any("lacks any" in failure for failure in evaluate(dated_case, result))
 
 
 def test_continuation_checks_repeated_calls_and_premature_success() -> None:

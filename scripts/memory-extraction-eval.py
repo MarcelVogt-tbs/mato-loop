@@ -1,4 +1,4 @@
-"""Compare isolated extraction prompts without reading or writing application data."""
+"""Evaluate the current Dreaming extractor without reading or writing application data."""
 
 import argparse
 import asyncio
@@ -14,7 +14,6 @@ from uuid import UUID
 from mato_loop_backend import prompt_eval as evaluation
 from mato_loop_backend.memory.dreaming import (
     DREAMING_SYSTEM_PROMPT,
-    DreamCandidates,
     _dreaming_reasoning_effort,
     _record_candidates_tool,
     _serialize_messages,
@@ -126,8 +125,8 @@ CASES = tuple(
          "nur offizielle Primärquellen und keine Gerüchte berücksichtigt haben.", 1, ("offiziell",)),
     case("positive_home_automation_setup", "Ich betreibe dauerhaft Home Assistant auf meinem eigenen "
          "Raspberry Pi 5 für die Hausautomation.", 1, ("Home Assistant", "Raspberry Pi 5")),
-    case("positive_ongoing_project", "Ich entwickle langfristig eine Open-Source-App namens Kartenwerk "
-         "zur Vektorisierung historischer Karten.", 1, ("Kartenwerk",)),
+    case("project_stays_in_history", "Ich entwickle langfristig eine Open-Source-App namens Kartenwerk "
+         "zur Vektorisierung historischer Karten."),
     case("positive_relationship", "Meine Schwester heißt Marlene und ist Tierärztin.", 1, ("Marlene",)),
     case("mixed_hardware_and_watcher", "Ich besitze eine Radeon AI PRO R9700 mit 32 GB VRAM. "
          + WATCHER, 1, ("R9700", "32"), ("Astra", "notify", "Watcher")),
@@ -157,17 +156,19 @@ HOLDOUT = (
          "Ausbildung zum Bergführer abschließen.", 1, ("Bergführer",)),
     case("holdout_mixed_default_browser", "Ich nutze Firefox als Standardbrowser. Für die Demo "
          "heute baue bitte einen violetten Exportknopf ein.", 1, ("Firefox",), ("Exportknopf", "violett")),
-    case("holdout_mixed_project_involvement", "Ich betreue seit 2020 ehrenamtlich das "
+    case("holdout_project_stays_in_history", "Ich betreue seit 2020 ehrenamtlich das "
          "Open-Source-Projekt Mooratlas zur Dokumentation von Moorflächen. In diesem Ticket "
-         "sollst du nur die Suchleiste nach rechts verschieben.", 1, ("Mooratlas",), ("Suchleiste",)),
+         "sollst du nur die Suchleiste nach rechts verschieben."),
 )
 
 
-def prompts(*, refined=False):
-    return {"baseline": BASELINE, "candidate": DREAMING_SYSTEM_PROMPT if refined else BASELINE + " " + ADDITION}
+def prompts(*, historical=False):
+    if historical:
+        return {"baseline_prompt": BASELINE, "experimental_prompt": BASELINE + " " + ADDITION}
+    return {"production": DREAMING_SYSTEM_PROMPT}
 
 
-def inputs(item, variant, *, refined=False, model_id="qwen3.8-27b", configured_effort=None, timeout=180):
+def inputs(item, system_prompt, *, model_id="qwen3.8-27b", configured_effort=None, timeout=180):
     model = ModelConfig(provider_id=UUID(int=1), model_id=model_id)
     profile = reasoning_profile(model_id)
     if configured_effort is not None and (profile is None or configured_effort not in profile.options):
@@ -183,8 +184,8 @@ def inputs(item, variant, *, refined=False, model_id="qwen3.8-27b", configured_e
             created_at=datetime(2026, 11, 1, tzinfo=UTC) + timedelta(hours=index),
         ))
     messages = [
-        {"role": "system", "content": prompts(refined=refined)[variant]},
-        {"role": "user", "content": "SOURCE MESSAGE BATCH (UNTRUSTED DATA)\n" + _serialize_messages(source)},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "SOURCE MESSAGE BATCH (UNTRUSTED DATA)\nNEW MESSAGES\n" + _serialize_messages(source)},
     ]
     return ProviderRequest(
         model=model_id, messages=messages,
@@ -197,40 +198,34 @@ def inputs(item, variant, *, refined=False, model_id="qwen3.8-27b", configured_e
 
 
 def score(item, result, source):
-    failures = evaluation.evaluate(item, result)
-    try:
-        parsed = DreamCandidates.model_validate(result.tool_calls[0].arguments)
-        user_ids = {message.id for message in source if message.role == "user"}
-        if any(not set(candidate.evidence_message_ids) <= user_ids for candidate in parsed.candidates):
-            failures.append("candidate cites unsupported user evidence")
-        if any(candidate.remove for candidate in parsed.candidates):
-            failures.append("unexpected removal candidate")
-    except (ValueError, IndexError, TypeError):
-        failures.append("invalid candidate schema")
-    return failures
+    return evaluation.evaluate(item, result, dreaming_evidence={
+        message.id: message.content for message in source if message.role == "user"
+    })
 
 
 def check():
     item = next(item for item in CASES if item.id == "positive_cli_working_style")
-    baseline, source = inputs(item, "baseline")
-    candidate, _ = inputs(item, "candidate")
-    assert baseline.tools == candidate.tools and baseline.messages[1:] == candidate.messages[1:]
-    assert candidate.messages[0]["content"] == baseline.messages[0]["content"] + " " + ADDITION
-    refined, _ = inputs(item, "candidate", refined=True)
-    assert refined.messages[0]["content"] == DREAMING_SYSTEM_PROMPT
-    assert baseline.enable_thinking is True and baseline.reasoning_effort == ReasoningEffort.MEDIUM
-    configured, _ = inputs(item, "candidate", configured_effort=ReasoningEffort.NONE)
+    request, source = inputs(item, prompts()["production"])
+    expected_messages, expected_tools = evaluation.build_case(item)
+    assert request.messages[0] == expected_messages[0]
+    assert request.tools == expected_tools
+    assert request.enable_thinking is True and request.reasoning_effort == ReasoningEffort.MEDIUM
+    configured, _ = inputs(item, DREAMING_SYSTEM_PROMPT, configured_effort=ReasoningEffort.NONE)
     assert configured.enable_thinking is False and configured.reasoning_effort is None
     empty = evaluation.ProviderResult(tool_calls=[evaluation.ToolCall(
         "empty", "record_memory_candidates", {"candidates": []},
     )])
     assert score(item, empty, source)
     assert not score(case("negative", "Teste das heute."), empty, source)
-    print(f"Checks passed: paired inputs, production prompt, and empty-output rejection; {len(CASES)} cases.")
+    print(f"Checks passed: production contract, reasoning settings, and empty-output rejection; {len(CASES)} cases.")
 
 
 async def run(args):
     cases = HOLDOUT if args.holdout else CASES
+    cases = tuple(item for item in cases if not args.case or item.id in args.case)
+    if not cases or set(args.case or ()) - {item.id for item in cases}:
+        raise SystemExit("Unknown extraction case in the selected case set.")
+    variants = prompts(historical=args.historical_prompts)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -239,17 +234,17 @@ async def run(args):
         "configuredReasoningEffort": args.reasoning_effort,
         "maxCandidates": MemorySettings().dreaming_max_candidates,
         "evaluatorSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "prompts": prompts(refined=args.refined),
+        "prompts": variants,
         "cases": [asdict(item) for item in cases], "records": [],
     }
     with output.open("x") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     for repetition in range(1, args.runs + 1):
         for index, item in enumerate(cases):
-            variants = ("baseline", "candidate") if (repetition + index) % 2 else ("candidate", "baseline")
-            for variant in variants:
+            order = tuple(variants) if (repetition + index) % 2 else tuple(reversed(variants))
+            for variant in order:
                 request, source = inputs(
-                    item, variant, refined=args.refined, model_id=args.model,
+                    item, variants[variant], model_id=args.model,
                     configured_effort=ReasoningEffort(args.reasoning_effort) if args.reasoning_effort else None,
                     timeout=args.timeout,
                 )
@@ -285,7 +280,8 @@ if __name__ == "__main__":
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--output", default="/workspace/data/memory-extraction-20261104.json")
-    parser.add_argument("--refined", action="store_true", help="Use the current production Dreaming prompt as the candidate.")
+    parser.add_argument("--historical-prompts", action="store_true", help="Compare older prompts using the current contract; not a reproduction of historical results.")
+    parser.add_argument("--case", action="append", help="Run only the selected case ID; repeat to select multiple cases.")
     parser.add_argument("--holdout", action="store_true", help="Use independently worded cases without changing the prompts.")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

@@ -94,6 +94,7 @@ class MemoryRecord(Base):
         CheckConstraint("revision >= 1", name="revision_positive"),
         Index("ix_memories_search_vector", "search_vector", postgresql_using="gin"),
         Index("ix_memories_user_category", "user_id", "category"),
+        Index("ix_memories_user_dream_subject", "user_id", "dream_subject_key"),
         Index(
             "uq_memories_user_normalized_content_hash",
             "user_id",
@@ -142,6 +143,7 @@ class MemoryRecord(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dream_subject_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     search_vector: Mapped[Any] = mapped_column(
         TSVECTOR,
@@ -163,6 +165,17 @@ class MemoryRecord(Base):
     embedding: Mapped[MemoryEmbedding | None] = relationship(
         back_populates="memory", cascade="all, delete-orphan", passive_deletes=True
     )
+
+
+class MemoryRetirement(Base):
+    """A non-retrievable observation that prevents replay of an ended state."""
+
+    __tablename__ = "memory_retirements"
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), primary_key=True)
+    subject_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trust_level: Mapped[str] = mapped_column(String(20), primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class MemoryEmbedding(Base):
