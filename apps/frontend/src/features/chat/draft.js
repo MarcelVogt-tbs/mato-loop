@@ -347,7 +347,7 @@ export const draftActions = {
       if (typeof window !== 'undefined') clearPersistedDrafts()
       return ownerUserId ? clearChatOutbox(ownerUserId) : Promise.resolve()
     },
-    attachmentReplacementError(files, sessionId, sourceSessionId = sessionId) {
+    attachmentReplacementError(files, sessionId, sourceSessionId = sessionId, outboxId = null) {
       const limits = useInstanceLimitsStore()
       if (files.length > limits.maxAttachmentsPerMessage) {
         return `Du kannst höchstens ${limits.maxAttachmentsPerMessage} Dateien pro Nachricht anhängen.`
@@ -375,7 +375,8 @@ export const draftActions = {
       const currentBytes = [
         ...Object.values(this.attachmentDrafts.newSessions).flat(),
         ...Object.values(this.attachmentDrafts.sessionMessages).flat(),
-        ...Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
+        ...Object.values(this.queuedMessages).flat().filter((entry) => entry.id !== outboxId)
+          .flatMap((entry) => entry.attachments)
       ].reduce((total, attachment) => total + (Number(attachment.file?.size) || 0), 0)
       const replacedBytes = replaced.reduce(
         (total, attachment) => total + (Number(attachment.file?.size) || 0),

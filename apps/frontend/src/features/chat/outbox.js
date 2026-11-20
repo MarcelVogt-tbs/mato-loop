@@ -5,7 +5,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/features/chat/outbox-storage'
+import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, pauseChatOutboxEntries, saveChatOutboxEntry } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
@@ -137,30 +137,37 @@ export const outboxActions = {
       }
       return entry
     },
-    async removeQueuedMessage(id, key = this.activeQueueKey, undoEntry = null, checkServer = false) {
+    async removeQueuedMessage(id, key = this.activeQueueKey, { undoEntry, stillOwned = () => true } = {}) {
       if (id === this.queueSendingEntryId) return null
       const queue = this.queuedMessages[key] || []
       const entry = queue.find((item) => item.id === id) || undoEntry
       if (!entry) return null
       const paused = entry.paused
-      // Block background delivery before waiting for local deletion.
+      const checkServer = entry.serverQueued || entry.deliveryUnconfirmed
+      const ids = [...new Set([id, ...queue.filter((item) => item.afterRunId === id).map((item) => item.id)])]
+      // Keep the local copy, but prevent a reload from retrying it during removal.
       entry.paused = true
       try {
-        await deleteChatOutboxEntries((this.queuedMessages[key] || queue)
-          .filter((item) => item.id === id || item.afterRunId === id).map((item) => item.id))
-        if (entry.serverQueued || checkServer) {
-          await api.delete(`/sessions/${entry.sessionId}/queue/${entry.id}`, { suppressErrorToast: true })
-          this.serverQueueVersion += 1
+        if (checkServer) {
+          await pauseChatOutboxEntries([id])
+          if (!stillOwned()) return null
+          await api.delete(`/sessions/${entry.sessionId}/queue/${entry.id}`, {
+            suppressErrorToast: true,
+            ...(entry.deliveryUnconfirmed && !entry.serverQueued ? { params: { require_present: true } } : {})
+          })
+          if (stillOwned()) this.serverQueueVersion += 1
         }
+        if (!stillOwned()) return null
+        await deleteChatOutboxEntries(ids)
       } catch (error) {
-        if (error?.response?.status !== 404) {
-          entry.paused = paused
-          if (!paused) this.scheduleQueueDrain(0)
-          if (undoEntry) throw error
-          notifyError(error)
-          return null
-        }
+        if (!stillOwned()) return null
+        entry.paused = Boolean(entry.deliveryUnconfirmed || paused)
+        if (entry.paused && this.queuedMessages[key]?.[0]?.id === id) this.queuedSendPausedSessions[key] = true
+        if (undoEntry) throw error
+        notifyError(error)
+        return null
       }
+      if (!stillOwned()) return null
       entry.paused = paused
       this.queuedMessages[key] = (this.queuedMessages[key] || queue).filter((item) => item.id !== id && item.afterRunId !== id)
       const remaining = this.queuedMessages[key]
@@ -196,30 +203,41 @@ export const outboxActions = {
         if (sending) await this.queueDrainPromise
         if (!entry || !stillOwned()) return null
         const sessionId = entry.sessionId || null
-        const restoreSent = async (messageId) => {
+        const restoreSent = async (messageId, sentSessionId = sessionId) => {
           if (!stillOwned()) return null
-          const session = this.current?.id === sessionId && this.current.messages.some((message) => message.id === messageId)
-            ? this.current : await this.fetchSession(sessionId)
+          const session = this.current?.id === sentSessionId && this.current.messages.some((message) => message.id === messageId)
+            ? this.current : await this.fetchSession(sentSessionId)
           const message = session.messages.find((item) => item.id === messageId)
-          if (!message) {
-            notifyError({ code: 'session.messageNotFound' })
-            return null
-          }
+            || (await api.get(`/sessions/${sentSessionId}/messages/${messageId}`, { suppressErrorToast: true })).data
+          if (!stillOwned()) return null
           if (confirmSentUndo && !await confirmSentUndo(session)) return null
           if (!stillOwned()) return null
           const files = entry.attachments.length === (message.attachments || []).length
             && entry.attachments.every((item) => item.file instanceof Blob)
             ? entry.attachments.map((item) => item.file) : undefined
-          const result = await this.undoUserMessage(message, { session, files }).catch(() => null)
+          const history = session.messages.includes(message) ? session : { ...session, messages: [message] }
+          const result = await this.undoUserMessage(message, { session: history, files, outboxId: id }).catch(() => null)
           if (result && stillOwned()) {
             this.serverQueueVersion += 1
-            const queue = this.queuedMessages[sessionId]
-            if (queue) this.queuedMessages[sessionId] = queue.filter((item) => item.id !== id)
+            await deleteChatOutboxEntry(id)
+            if (!stillOwned()) return null
+            const entryKey = queueKeyForEntry(entry)
+            const queue = this.queuedMessages[entryKey]?.filter((item) => item.id !== id)
+            if (queue?.length) this.queuedMessages[entryKey] = queue
+            else delete this.queuedMessages[entryKey]
+            if (!sessionId && !this.current && this.activeQueueKey === key) {
+              this.createdSessionResult = { created: true, sessionId: sentSessionId, projectId: session.projectId }
+            }
             void this.refreshServerQueue().catch(() => {})
           }
           return result
         }
         if (entry.sentMessageId) return await restoreSent(entry.sentMessageId)
+        if (entry.deliveryUnconfirmed && (!sessionId || entry.continuationRunId)) {
+          if (sessionId) return await restoreSent(id)
+          const { data } = await api.get(`/sessions/message-submissions/${id}`, { suppressErrorToast: true })
+          return await restoreSent(data.messageId, data.sessionId)
+        }
         if (confirmDraftUndo && !await confirmDraftUndo()) return null
         if (!stillOwned()) return null
         let attachments = entry.attachments
@@ -234,12 +252,10 @@ export const outboxActions = {
             }))
           }
           if (!stillOwned()) return null
-          const checkServer = Boolean(sessionId && sending && !entry.continuationRunId)
-          if (!await this.removeQueuedMessage(id, sessionId || key, entry, checkServer)) return null
+          if (!await this.removeQueuedMessage(id, sessionId || key, { undoEntry: entry, stillOwned })) return null
         } catch (error) {
           const descriptor = errorDescriptor(error)
           if (descriptor?.code !== 'session.runAlreadyActive' || !descriptor.params?.messageId) throw error
-          entry.serverQueued = true
           return await restoreSent(descriptor.params.messageId)
         }
         if (!stillOwned()) return null
@@ -256,7 +272,11 @@ export const outboxActions = {
         this.persistDrafts()
         return entry
       } catch (error) {
-        if (stillOwned()) notifyError(error)
+        if (stillOwned()) {
+          if (entry?.deliveryUnconfirmed && errorDescriptor(error)?.code === 'session.messageNotFound') {
+            notifyError({}, 'Der Versand konnte noch nicht geklärt werden. Die Nachricht bleibt im Postausgang pausiert.')
+          } else notifyError(error)
+        }
         return null
       } finally {
         if (this.queueUndoId === id) {
@@ -277,7 +297,7 @@ export const outboxActions = {
       delete this.queuedSendPausedSessions[key]
     },
     async resumeQueuedSend(key = this.activeQueueKey) {
-      if (!key) return
+      if (!key || this.queueUndoId) return
       const entry = this.queuedMessages[key]?.[0]
       if (entry?.paused) {
         if (entry.serverQueued) {
@@ -458,6 +478,7 @@ export const outboxActions = {
           this.scheduleQueueDrain()
         } else {
           entry.paused = true
+          if (!error?.response || error.response.status >= 500) entry.deliveryUnconfirmed = true
           try {
             await saveChatOutboxEntry(toRaw(entry))
           } catch {

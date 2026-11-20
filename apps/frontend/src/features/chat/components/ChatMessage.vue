@@ -241,7 +241,7 @@ const metadata = computed(() => {
     deliveryIcon: message.deliveryStatus === 'sending' ? 'send'
       : message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule',
     deliveryLabel: message.deliveryStatus === 'sending' ? 'Wird gesendet …'
-      : message.deliveryStatus === 'failed' ? 'Nicht gesendet' : 'Geplant',
+      : message.deliveryStatus === 'failed' ? (message.deliveryUnconfirmed ? 'Versand unbestätigt' : 'Nicht gesendet') : 'Geplant',
     canUndo: message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-'),
     canRetry: !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running),
     canRecover: (message.deliveryStatus === 'failed' && message.outboxId === firstQueuedId)

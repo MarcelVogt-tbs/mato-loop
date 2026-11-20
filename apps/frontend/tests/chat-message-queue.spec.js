@@ -987,6 +987,72 @@ describe('chat message queue', () => {
       .toEqual(['Bearbeiten', 'saved upload', []])
   })
 
+  it.each(['first', 'continuation'])('undoes a committed %s send after its response is lost', async (mode) => {
+    const chat = useChatStore()
+    if (mode === 'continuation') {
+      activeSession(chat)
+      chat.runSessionId = 'session-1'
+      chat.runId = 'active-run'
+    }
+    const entry = await chat.queueMessage('Bearbeiten', { interrupt: mode === 'continuation' })
+    const messageId = mode === 'first' ? 'committed-message' : entry.id
+    const route = `/sessions/session-1/messages/${messageId}/undo`
+    let failSend
+    let undone = false
+    api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/message-submissions/')
+      ? { sessionId: 'session-1', messageId }
+      : url === '/sessions/session-1' ? { id: 'session-1', messages: undone ? [] : [
+          { id: messageId, role: 'user', content: entry.content }
+        ] } : { items: [] } }))
+    api.post.mockImplementation((url) => {
+      if (url === route) {
+        undone = true
+        return Promise.resolve({ data: { draft: { content: entry.content } } })
+      }
+      if (url === '/sessions/defaults') return Promise.resolve({ data: {} })
+      return new Promise((_, reject) => { failSend = reject })
+    })
+    const sending = chat.drainOutbox()
+    const restoring = chat.restoreQueuedMessage(entry.id)
+    failSend(new Error('Connection lost after commit'))
+    await Promise.all([sending, restoring])
+    expect({ undone, draft: chat.drafts.sessionMessages['session-1'], stored: await loadChatOutbox('user-1') })
+      .toEqual({ undone: true, draft: 'Bearbeiten', stored: [] })
+  })
+
+  it.each(['offline', 'missing'])('keeps the local message paused when removal is unconfirmed (%s)', async (state) => {
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = await chat.queueMessage('Nur lokal gespeichert')
+    let failSend
+    api.post.mockImplementationOnce(() => new Promise((_, reject) => { failSend = reject }))
+    api.delete.mockRejectedValue(state === 'offline' ? new Error('offline') : {
+      response: { status: 404, data: { error: { code: 'session.messageNotFound' } } }
+    })
+    const sending = chat.drainOutbox()
+    const restoring = chat.restoreQueuedMessage(entry.id)
+    failSend(new Error('offline'))
+    const [, restored] = await Promise.all([sending, restoring])
+    expect([restored, await loadChatOutbox('user-1')]).toMatchObject([
+      null, [{ id: entry.id, content: entry.content, paused: true, deliveryUnconfirmed: true }]
+    ])
+  })
+
+  it('counts an admitted attachment only once when undo moves it back to the draft', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = { id: 'request', sessionId: 'session-1', serverQueued: true, content: 'Bearbeiten',
+      attachments: [attachment('gross.txt', 600 * 1024 * 1024)] }
+    chat.queuedMessages['session-1'] = [entry]
+    chat.current.messages = [{ id: 'sent', role: 'user', content: entry.content, attachments: [{ filename: 'gross.txt' }] }]
+    api.delete.mockRejectedValueOnce({ response: { status: 409, data: { error: {
+      code: 'session.runAlreadyActive', params: { messageId: 'sent' }
+    } } } })
+    api.post.mockResolvedValue({ data: { draft: { content: entry.content } } })
+    await chat.restoreQueuedMessage(entry.id)
+    expect(chat.activeAttachmentDraft.map(({ file }) => file.name)).toEqual(['gross.txt'])
+  })
+
   it('keeps the server copy when restoring cannot clean up local storage', async () => {
     const chat = useChatStore()
     activeSession(chat)

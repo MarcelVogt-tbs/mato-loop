@@ -560,16 +560,17 @@ describe('voice attachment composer', () => {
     chat.queuedMessages['session-1'] = [
       { id: 'sending', content: 'Sending', attachments: [] },
       { id: 'planned', content: 'Planned', attachments: [] },
-      { id: 'failed', content: 'Failed', attachments: [], paused: true }
+      { id: 'failed', content: 'Failed', attachments: [], paused: true },
+      { id: 'unconfirmed', content: 'Unconfirmed', attachments: [], paused: true, deliveryUnconfirmed: true }
     ]
     chat.queueSendingEntryId = 'sending'
     const undo = vi.spyOn(chat, 'restoreQueuedMessage').mockResolvedValue(null)
     await nextTick()
     const status = (id) => root.querySelector(`[data-message-id="${id}"] [role="status"]`)
     await click('Nachricht rückgängig machen')
-    expect([['sending', 'planned', 'failed'].map((id) => [status(id).textContent, status(id).querySelector('[name]')?.getAttribute('name')]),
+    expect([['sending', 'planned', 'failed', 'unconfirmed'].map((id) => [status(id).textContent, status(id).querySelector('[name]')?.getAttribute('name')]),
       undo.mock.calls[0]?.[0]]).toEqual([
-      [['Wird gesendet …', 'send'], ['Geplant', 'schedule'], ['Nicht gesendet', 'error_outline']], 'sending'
+      [['Wird gesendet …', 'send'], ['Geplant', 'schedule'], ['Nicht gesendet', 'error_outline'], ['Versand unbestätigt', 'error_outline']], 'sending'
     ])
   })
 

@@ -92,6 +92,8 @@ Die Uhr mit **Geplant** kennzeichnet wartende Nachrichten. Der Papierflieger mit
 
 Mit **Nachricht rückgängig machen** holst du Text und Anhänge bereits während des Sendens zurück. Wartet die Nachricht noch, läuft der aktuelle Auftrag weiter. Ist sie schon im Chat angekommen, entfernt Rückgängig nach Bestätigung auch spätere Chatnachrichten und stoppt den laufenden Auftrag. Bereits ausgeführte Aktionen bleiben bestehen. Änderst du Computer oder Arbeitsordner, hält die Queue betroffene Nachrichten an; übernimm sie in den Entwurf, prüfe den neuen Kontext und sende erneut.
 
+**Versand unbestätigt** heißt, dass der Browser keine verlässliche Antwort erhalten hat. Die Nachricht bleibt lokal gespeichert und pausiert. Prüfe nach dem Wiederverbinden mit **Nachricht rückgängig machen** erneut, ob sie schon angekommen ist. Kopiere den Text nicht in eine neue Nachricht, solange unklar ist, ob der ursprüngliche Auftrag bereits läuft.
+
 Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
 
 Eine verfügbare Reasoning-Zusammenfassung ersetzt die Bezeichnung **Nachdenken**. Die Zeile lässt sich nur aufklappen, wenn zusätzlicher Reasoning-Text vorhanden ist. Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.

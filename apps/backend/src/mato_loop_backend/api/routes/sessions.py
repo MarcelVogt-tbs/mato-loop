@@ -724,6 +724,19 @@ async def message_queue(
     return {"items": await list_entries(db, user.id)}
 
 
+@router.get("/message-submissions/{request_id}")
+async def get_message_submission(
+    request_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str]:
+    submission = await session_service.find_message_submission(db, user.id, request_id)
+    if submission is None:
+        raise ApiError(404, "session.messageNotFound")
+    session_id, message_id = submission
+    return {"sessionId": str(session_id), "messageId": str(message_id)}
+
+
 async def _queue_session(db, session_id, user_id):
     await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
     session = await _mutable_session(db, session_id, user_id, for_update=True)
@@ -744,12 +757,16 @@ async def remove_queued_message(
     session_id: UUID, request_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    require_present: bool = False,
 ) -> Response:
     from mato_loop_backend.sessions.message_queue import remove_entry
 
     await _queue_session(db, session_id, user.id)
-    if await db.get(QueuedMessage, request_id) is None:
+    entry = await db.get(QueuedMessage, request_id)
+    if entry is None or entry.session_id != session_id:
         await _raise_if_queue_admitted(db, session_id, request_id)
+        if require_present:
+            raise ApiError(404, "session.messageNotFound")
     await remove_entry(db, session_id, request_id)
     await db.commit()
     return Response(status_code=204)

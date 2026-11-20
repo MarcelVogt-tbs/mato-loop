@@ -914,7 +914,7 @@ export const sessionsActions = {
         ...(session.projectId && projects.loaded ? [projects.refreshSummaries([session.projectId], { suppressErrorToast: true })] : [])
       ])
     },
-    async undoUserMessage(message, { session = this.current, files } = {}) {
+    async undoUserMessage(message, { session = this.current, files, outboxId } = {}) {
       if (!session || message?.role !== 'user' || this.historyActionPending) return null
       const owner = this.draftOwnerUserId
       this.historyActionPending = true
@@ -929,7 +929,8 @@ export const sessionsActions = {
         const replacementError = this.attachmentReplacementError(
           files,
           session.id,
-          session.id
+          session.id,
+          outboxId
         )
         if (replacementError) {
           notifyError({}, replacementError)

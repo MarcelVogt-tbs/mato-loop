@@ -159,11 +159,29 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     assert await db.get(QueuedAttachment, (request_id, 0)) is None
     assert [item["id"] for item in await message_queue.list_entries(db, tree.user.id)] == [str(second_id)]
     admitted = await db.get(AgentRun, request_id)
-    removed = await client.delete(f"/api/sessions/{session.id}/queue/{request_id}")
+    removed = await client.delete(f"/api/sessions/{session.id}/queue/{request_id}", params={"require_present": True})
     download = await client.get(listing[0]["attachments"][0]["url"])
     assert [(response.status_code, response.json()["error"]["params"]["messageId"]) for response in (removed, download)] == [
         (409, str(admitted.input_message_id)), (409, str(admitted.input_message_id)),
     ]
+    missing = await client.delete(f"/api/sessions/{session.id}/queue/{uuid4()}", params={"require_present": True})
+    assert (missing.status_code, missing.json()["error"]["code"]) == (404, "session.messageNotFound")
+
+
+async def test_message_submission_lookup_only_returns_owned_root_messages(tree, client):
+    session, run, message = tree.records[0]
+    child, child_run, _ = tree.records[1]
+    run.status = "queued"
+    child_run.status = "queued"
+    await tree.db.commit()
+
+    found = await client.get(f"/api/sessions/message-submissions/{run.id}")
+    hidden = await client.get(f"/api/sessions/message-submissions/{child_run.id}")
+    foreign = await sessions.session_service.find_message_submission(tree.db, tree.foreign.id, run.id)
+    assert (found.status_code, found.json(), hidden.status_code, foreign) == (
+        200, {"sessionId": str(session.id), "messageId": str(message.id)}, 404, None,
+    )
+    assert child.parent_session_id == session.id
 
 
 @pytest.mark.parametrize("blocker", ["workspace", "predecessor"])

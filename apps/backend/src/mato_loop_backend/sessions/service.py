@@ -857,6 +857,28 @@ async def latest_user_message(db: AsyncSession, session_id: UUID) -> Message:
     return message
 
 
+async def find_message_submission(
+    db: AsyncSession, user_id: UUID, request_id: UUID,
+) -> tuple[UUID, UUID] | None:
+    from mato_loop_backend.sessions.state import deleted_session_clause
+
+    row = (await db.execute(
+        select(AgentRun.session_id, Message.id)
+        .join(ChatSession, ChatSession.id == AgentRun.session_id)
+        .join(Message, (Message.id == AgentRun.input_message_id) & (Message.session_id == ChatSession.id))
+        .where(
+            AgentRun.id == request_id,
+            AgentRun.parent_run_id.is_(None),
+            ChatSession.parent_session_id.is_(None),
+            ChatSession.user_id == user_id,
+            ChatSession.session_type == "chat",
+            ~deleted_session_clause(),
+            Message.role == "user",
+        )
+    )).one_or_none()
+    return (row[0], row[1]) if row is not None else None
+
+
 async def duplicate_submission_response(
     db: AsyncSession,
     run_id: UUID | None,
