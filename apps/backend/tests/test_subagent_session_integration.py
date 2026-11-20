@@ -143,7 +143,10 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     assert download.content == b"saved upload"
 
     async def accept(db, session, content, **kwargs):
-        db.add(AgentRun(id=kwargs["run_id"], session_id=session.id, status="completed"))
+        message = Message(session_id=session.id, role="user", content=content)
+        db.add(message)
+        await db.flush()
+        db.add(AgentRun(id=kwargs["run_id"], session_id=session.id, status="completed", input_message_id=message.id))
         await db.commit()
 
     start = AsyncMock(side_effect=accept)
@@ -155,6 +158,12 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     assert (start.await_args.args[2], start.await_args.kwargs["attachments"][0].data) == ("First", b"saved upload")
     assert await db.get(QueuedAttachment, (request_id, 0)) is None
     assert [item["id"] for item in await message_queue.list_entries(db, tree.user.id)] == [str(second_id)]
+    admitted = await db.get(AgentRun, request_id)
+    removed = await client.delete(f"/api/sessions/{session.id}/queue/{request_id}")
+    download = await client.get(listing[0]["attachments"][0]["url"])
+    assert [(response.status_code, response.json()["error"]["params"]["messageId"]) for response in (removed, download)] == [
+        (409, str(admitted.input_message_id)), (409, str(admitted.input_message_id)),
+    ]
 
 
 @pytest.mark.parametrize("blocker", ["workspace", "predecessor"])

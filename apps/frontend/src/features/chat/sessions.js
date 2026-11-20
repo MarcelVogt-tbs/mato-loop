@@ -914,18 +914,18 @@ export const sessionsActions = {
         ...(session.projectId && projects.loaded ? [projects.refreshSummaries([session.projectId], { suppressErrorToast: true })] : [])
       ])
     },
-    async undoUserMessage(message) {
-      const session = this.current
-      if (!session || this.loading || message?.role !== 'user' || this.historyActionPending) return null
+    async undoUserMessage(message, { session = this.current, files } = {}) {
+      if (!session || message?.role !== 'user' || this.historyActionPending) return null
+      const owner = this.draftOwnerUserId
       this.historyActionPending = true
       try {
-        let files
         try {
-          files = await downloadMessageAttachmentFiles(message)
+          files ??= await downloadMessageAttachmentFiles(message)
         } catch (error) {
           notifyError(error, 'Die Anhänge konnten nicht wiederhergestellt werden.')
           throw error
         }
+        if (owner !== this.draftOwnerUserId) return null
         const replacementError = this.attachmentReplacementError(
           files,
           session.id,
@@ -957,6 +957,7 @@ export const sessionsActions = {
               // Keep the downloaded files recoverable when the server state cannot be determined.
             }
           }
+          if (owner !== this.draftOwnerUserId) return null
           if (!data && ambiguous && !mutationKnownUnchanged) {
             this.drafts.sessionMessages[session.id] = message.content
             this.replaceAttachmentFiles(files, session.id, message.attachments)
@@ -967,9 +968,10 @@ export const sessionsActions = {
             throw error
           }
         }
+        if (owner !== this.draftOwnerUserId) return null
         const stillSelected = this.selectedSessionId === session.id && this.current?.id === session.id
         const updatedSession = recoveredSession || sessionBeforeUserMessage(
-          stillSelected ? this.current : session,
+          stillSelected && this.current.messages.some((item) => item.id === message.id) ? this.current : session,
           message.id
         )
         if (stillSelected) {

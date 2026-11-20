@@ -1617,18 +1617,17 @@ async def send_message(
     if after_run_id is not None and not getattr(payload, "enqueue", False):
         raise SessionServiceError(422, "validation.invalid", field="after_run_id")
     if getattr(payload, "enqueue", False):
-        from mato_loop_backend.sessions.message_queue import enqueue
+        from mato_loop_backend.sessions.message_queue import enqueue, schedule_delivery
 
         request_id = payload.run_id or uuid4()
-        await enqueue(db, item, request_id, {
+        entry = await enqueue(db, item, request_id, {
             "content": content,
             **({"agent_profile_id": str(payload.agent_profile_id)} if payload.agent_profile_id else {}),
             "active_file": await active_file_payload(payload.active_file, item, db),
         }, attachments, after_run_id=after_run_id)
         await db.commit()
-        from mato_loop_backend.sessions.message_queue import schedule_delivery
-
-        schedule_delivery(item.id)
+        if entry is not None:
+            schedule_delivery(session_id)
         return {"queued": True, "runId": str(request_id)}
     active = await db.scalar(
         select(AgentRun).where(

@@ -732,6 +732,13 @@ async def _queue_session(db, session_id, user_id):
     return session
 
 
+async def _raise_if_queue_admitted(db, session_id: UUID, request_id: UUID) -> None:
+    run = await db.get(AgentRun, request_id)
+    if run is not None and run.session_id == session_id and run.parent_run_id is None:
+        params = {"messageId": str(run.input_message_id)} if run.input_message_id else None
+        raise ApiError(409, "session.runAlreadyActive", params=params)
+
+
 @router.delete("/{session_id}/queue/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_queued_message(
     session_id: UUID, request_id: UUID,
@@ -742,9 +749,7 @@ async def remove_queued_message(
 
     await _queue_session(db, session_id, user.id)
     if await db.get(QueuedMessage, request_id) is None:
-        run = await db.get(AgentRun, request_id)
-        if run is not None and run.session_id == session_id:
-            raise ApiError(409, "session.runAlreadyActive")
+        await _raise_if_queue_admitted(db, session_id, request_id)
     await remove_entry(db, session_id, request_id)
     await db.commit()
     return Response(status_code=204)
@@ -777,6 +782,7 @@ async def queued_attachment(
         QueuedMessage.id == request_id, QueuedMessage.session_id == session_id, QueuedAttachment.position == position,
     ))
     if data is None:
+        await _raise_if_queue_admitted(db, session_id, request_id)
         raise ApiError(404, "attachment.notFound")
     return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
@@ -1036,13 +1042,16 @@ async def undo_user_message(
 ) -> dict[str, Any]:
     if await _mutable_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.notFound")
+    from mato_loop_backend.sessions.message_queue import hold_delivery_for_undo
+
     try:
-        result = await ChatHistoryService.undo_user_message(
-            db,
-            session_id=session_id,
-            user_id=user.id,
-            message_id=message_id,
-        )
+        with hold_delivery_for_undo(session_id):
+            result = await ChatHistoryService.undo_user_message(
+                db,
+                session_id=session_id,
+                user_id=user.id,
+                message_id=message_id,
+            )
     except ChatHistoryError as exc:
         raise ApiError(exc.status_code, exc.code) from exc
     return {

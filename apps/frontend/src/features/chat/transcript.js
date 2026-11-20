@@ -23,7 +23,8 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
       content: entry.content,
       sourceType: entry.sourceType,
       attachments: entry.attachments,
-      deliveryStatus: entry.id === sendingId || entry.id === pendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
+      deliveryStatus: entry.paused ? 'failed'
+        : !entry.serverQueued && (entry.id === sendingId || entry.id === pendingId) ? 'sending' : 'queued'
     }))]
 }
 
