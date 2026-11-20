@@ -1362,6 +1362,9 @@ class AgentRuntime:
             cls._instruction_waits.pop(run_id, None)
             cls._provider_active_runs.discard(run_id)
             cls._tool_active_runs.discard(run_id)
+            from mato_loop_backend.sessions.message_queue import schedule_delivery
+
+            schedule_delivery(session_id)
 
     @classmethod
     async def _execute_loop(

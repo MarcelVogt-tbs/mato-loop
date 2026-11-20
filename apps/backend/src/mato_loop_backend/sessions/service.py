@@ -1626,6 +1626,9 @@ async def send_message(
             "active_file": await active_file_payload(payload.active_file, item, db),
         }, attachments, after_run_id=after_run_id)
         await db.commit()
+        from mato_loop_backend.sessions.message_queue import schedule_delivery
+
+        schedule_delivery(item.id)
         return {"queued": True, "runId": str(request_id)}
     active = await db.scalar(
         select(AgentRun).where(

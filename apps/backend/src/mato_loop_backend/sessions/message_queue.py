@@ -160,11 +160,18 @@ def _delivery_finished(session_id, task):
         logger.error("Message queue admission failed (%s)", type(error).__name__)
 
 
+def schedule_delivery(session_id: UUID) -> None:
+    if session_id in _deliveries:
+        return
+    task = asyncio.create_task(deliver_next(session_id))
+    _deliveries[session_id] = task
+    task.add_done_callback(
+        lambda completed, session_id=session_id: _delivery_finished(session_id, completed)
+    )
+
+
 async def process_pending() -> None:
     async with AsyncSessionFactory() as db:
         sessions = list(await db.scalars(select(QueuedMessage.session_id).distinct()))
     for session_id in sessions:
-        if session_id not in _deliveries:
-            task = asyncio.create_task(deliver_next(session_id))
-            _deliveries[session_id] = task
-            task.add_done_callback(lambda task, session_id=session_id: _delivery_finished(session_id, task))
+        schedule_delivery(session_id)

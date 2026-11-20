@@ -2,7 +2,7 @@ import json
 from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 from uuid import UUID, uuid4
 
 import httpx
@@ -121,6 +121,8 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
 
     db = tree.db
     session, _, _ = tree.records[0]
+    schedule = Mock()
+    monkeypatch.setattr(message_queue, "schedule_delivery", schedule)
     request_id, second_id = uuid4(), uuid4()
     response = await client.post(f"/api/sessions/{session.id}/messages/with-attachments", data={"payload": json.dumps({
         "content": "First", "run_id": str(request_id), "enqueue": True,
@@ -133,6 +135,7 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     followup.raise_for_status()
     duplicate = await client.post(f"/api/sessions/{session.id}/messages", json={"content": "First", "run_id": str(request_id), "enqueue": True})
     duplicate.raise_for_status()
+    assert schedule.call_args_list == [call(session.id), call(session.id)]
     listing = (await client.get("/api/sessions/message-queue")).json()["items"]
     assert [item["id"] for item in listing] == [str(request_id), str(second_id)]
     assert await message_queue.list_entries(db, tree.foreign.id) == []
